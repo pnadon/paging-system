@@ -15,9 +15,9 @@ typedef struct pageSystem {
 } pageSystem;
 
 void fatalsys( char *str );
-void parentProcess(int ***pipes, int mode);
+void parentProcess(int pipes[3][2][2], int mode);
 void childProcess(int pipes[2][2], char *refArg );
-void initPipes( int pipes[2][2]);
+void setFlags(int pipes[2][2]);
 pageSystem initSystem();
 pageSystem processLRU(int val, pageSystem system);
 pageSystem processFIFO(int val, pageSystem system);

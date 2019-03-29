@@ -48,13 +48,13 @@ int main( int argc, char** argv) {
     return 0;
 }
 
-void parentProcess(int ***pipes, int mode) {
+void parentProcess(int pipes[3][2][2], int mode) {
     pageSystem systems[3];
     for (int i = 0; i < 3; i++) {
         systems[i] = initSystem( mode);
     }
     int val;
-    int runningProcesses = 0;
+    int runningProcesses = 3;
     while( runningProcesses > 0) {
         runningProcesses = 3;
         for( int i = 0; i < 3; i++) {
@@ -65,10 +65,12 @@ void parentProcess(int ***pipes, int mode) {
                         break;
                     }
                     else {
+                        printf("no eagain\n");
                         fatalsys(" read failed");
                         exit( EXIT_FAILURE);
                     }
                 case 0:
+                    printf("case 0\n");
                     runningProcesses--;
                     break;
                 default:
@@ -86,7 +88,7 @@ void parentProcess(int ***pipes, int mode) {
 
 
 void childProcess(int pipes[2][2], char *refArg ) {
-    initPipes( pipes);
+    setFlags(pipes);
     int pageNum;
     int returnPage;
 
@@ -99,7 +101,7 @@ void childProcess(int pipes[2][2], char *refArg ) {
     while ( fscanf(refFile, "%d", &pageNum) != EOF) {
         printf("read from file:%d:\n", pageNum);
         write(pipes[FROM_CHILD][TO_PARENT], &pageNum, sizeof(pageNum));
-        while( read( pipes[FROM_PARENT][TO_CHILD], &returnPage, sizeof( returnPage)) == 0){}
+        read( pipes[FROM_PARENT][TO_CHILD], &returnPage, sizeof( returnPage));
         printf("received %d from parent\n", returnPage);
     }
 
@@ -178,7 +180,7 @@ int getOldest( pageSystem system) {
     return oldest;
 }
 
-void initPipes( int pipes[2][2]) {
+void setFlags(int pipes[2][2]) {
     unsigned int flags;
 
     if ( (flags = fcntl(pipes[FROM_CHILD][TO_PARENT], F_GETFL )) < 0 )
