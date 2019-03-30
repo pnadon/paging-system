@@ -140,33 +140,6 @@ void parent(int p[2], int mode, pageSystem system) {
     printPageSystem( system);
 }
 
-pageSystem processLRU(int val, pageSystem system) {
-    system.callRes = findPage( system.pages, val);
-
-    if( system.callRes == -1) {
-        int oldest = getOldest( system);
-        system.pages[ oldest] = val;
-        system = updateAges( system, oldest);
-    } else {
-        system = updateAges( system, system.callRes);
-    }
-
-    return system;
-}
-
-pageSystem processFIFO(int val, pageSystem system) {
-    system.callRes = findPage( system.pages, val);
-
-    if( system.callRes == -1) {
-        system.pages[ system.oldest] = val;
-        system.oldest = (system.oldest + 1) % NUM_PAGES;
-        system.faults++;
-    }
-    system.referenceCount++;
-
-    return system;
-}
-
 void child( int p[2], char *refArg ) {
     int pageNum;
 
@@ -194,6 +167,32 @@ void child( int p[2], char *refArg ) {
     exit( EXIT_SUCCESS );
 }
 
+pageSystem processLRU(int val, pageSystem system) {
+    system.callRes = findPage( system.pages, val);
+
+    if( system.callRes == -1) {
+        int oldest = getOldest( system);
+        system.pages[ oldest] = val;
+        system = updateAges( system, oldest);
+    } else {
+        system = updateAges( system, system.callRes);
+    }
+
+    return system;
+}
+
+pageSystem processFIFO(int val, pageSystem system) {
+    system.callRes = findPage( system.pages, val);
+
+    if( system.callRes == -1) {
+        system.pages[ system.oldest] = val;
+        system.oldest = (system.oldest + 1) % NUM_PAGES;
+        system.faults++;
+    }
+    system.referenceCount++;
+
+    return system;
+}
 
 void fatalsys( char *errmsg ) {
     perror( errmsg );
