@@ -17,7 +17,7 @@ typedef struct pageSystem {
 void parent(int p[2], int mode, pageSystem system);
 void child( int p[2], char *fileArg);
 pageSystem processLRU(int val, pageSystem system);
-pageSystem processFIFO(int val, pageSystem system);
+pageSystem processFIFO(int pageNum, pageSystem system);
 void initPipe( int pfd[]);
 void printPageSystem( pageSystem system);
 int findPage( int pages[], int num);

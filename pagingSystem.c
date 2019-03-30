@@ -6,43 +6,50 @@
 #include <errno.h>
 #include "pagingSystem.h"
 
-const int LRU_MODE = 0;
-const int FIFO_MODE = 1;
-const int NUM_PAGES = 4;
-const int NUM_FILES = 3;
+#define MODE_ARG_INDEX 1
+#define LRU_MODE 0
+#define FIFO_MODE 1
+#define NUM_PAGES 4
+#define NUM_FILES 3
+#define NUM_OTHER_ARGS 2
+#define FRAMES_PRINTED_PER_LINE 14
 
-const int TO_PARENT = 0;
-const int TO_CHILD = 1;
-const int WRITE_PIPE = 1;
-const int READ_PIPE = 0;
+#define TO_PARENT 0
+#define TO_CHILD 1
+#define WRITE_PIPE 1
+#define READ_PIPE 0
 
-const int FALSE = 0;
-const int TRUE = 1;
+#define CHILD_PROCESS 0
+
+#define FALSE 0
+#define TRUE 1
+
+#define MAX_BUFFER_SIZE 1024
 
 int main( int argc, char *argv[]) {
-    if( argc != (2 + NUM_FILES)) {
+    if( argc != (NUM_OTHER_ARGS + NUM_FILES)) {
         fprintf( stderr, "Incorrect argument count\n");
         exit( EXIT_FAILURE);
     }
 
     int mode;
-    if( strcmp( argv[1], "-l") == 0){
+    if( strcmp( argv[ MODE_ARG_INDEX], "-l") == 0){
         mode = LRU_MODE;
     } else {
         mode = FIFO_MODE;
     }
 
-    char *fileArgs[3] = {argv[2], argv[3], argv[4]};
-    int pipes[3][2][2];
+    char *fileArgs[NUM_FILES] = {argv[2], argv[3], argv[4]};
+    int pipes[NUM_FILES][2][2];
 
-    for( int i = 0; i < 3; i++) {
+    for( int i = 0; i < NUM_FILES; i++) {
         pipe( pipes[i][TO_PARENT]);
         pipe( pipes[i][TO_CHILD]);
 
         switch ( fork()) {
-            case -1:    /* error */
+            case -1:
                 fatalsys("fork call");
-            case  0:    /* childProcess */
+            case  CHILD_PROCESS:
                 childProcess(pipes[i], fileArgs[i]);
             default:
                 break;
@@ -52,56 +59,57 @@ int main( int argc, char *argv[]) {
     return 0;
 }
 
-void parentProcess(int pipes[3][2][2], int mode, char *fileArgs[3]) {
-    pageSystem systems[3];
+/*
+ * Loops through each child's pipes and reads page numbers from them.
+ * If the pipe is empty but not closed it is ignored.
+ * If the pipe is empty and closed, the number of running processes
+ *   is decremented, and the final results of that child process is printed.
+ * The parentProcess then updates the paging system based on the replacement algorithm chosen via mode,
+ *   and the frame within which the page was stored is returned to the child via pipes.
+ */
+void parentProcess(int pipes[NUM_FILES][2][2], int mode, char *fileArgs[NUM_FILES]) {
+    pageSystem systems[NUM_FILES];
     int returnPage;
-    int processDone[3] = {FALSE, FALSE, FALSE};
-    for (int i = 0; i < 3; i++) {
+    int processDone[NUM_FILES] = {FALSE, FALSE, FALSE};
+
+    for (int i = 0; i < NUM_FILES; i++) {
         systems[i] = initSystem( fileArgs[i]);
         close(pipes[i][TO_PARENT][WRITE_PIPE]);
         close(pipes[i][TO_CHILD][READ_PIPE]);
     }
     int val;
-    int runningProcesses = 3;
+    int runningProcesses = NUM_FILES;
+
     while( runningProcesses > 0) {
-        //printf("|| start of while || \n");
-        for( int i = 0; i < 3; i++) {
-            //printf("|| start of for loop %d ||\n", i);
+        for( int i = 0; i < NUM_FILES; i++) {
             int retval = read( pipes[i][TO_PARENT][READ_PIPE], &val, sizeof(val));
-            //printf("|| retVal of read: %d\n", retval);
             switch( retval) {
                 case -1:
                     if( errno == EAGAIN) {
-                        //printf("\n||%d|| case -1 EAGAIN\n\n", i);
                         break;
                     }
                     else {
-                        //printf("\n||%d|| case -1 no eagain\n\n", i);
-                        if( processDone[i] == 0) {
+                        if( processDone[i] == FALSE) {
                             printPageSystem( systems[i]);
-                            processDone[i] = 1;
+                            processDone[i] = TRUE;
                             runningProcesses--;
                         }
                         break;
                     }
                 case 0:
-                    //printf("\n||%d|| case 0\n\n", i);
-                    if( processDone[i] == 0) {
+                    if( processDone[i] == FALSE) {
                         printPageSystem( systems[i]);
-                        processDone[i] = 1;
+                        processDone[i] = TRUE;
                         runningProcesses--;
                     }
                     break;
-                    //fatalsys(" read failed");
                 default:
-                    //printf("||%d|| value piped to parent %d\n", i, val);
                     if( mode == LRU_MODE) {
                         systems[i] = processLRU(val, systems[i]);
                     } else {
                         systems[i] = processFIFO(val, systems[i]);
                     }
                     returnPage = systems[i].returnVal;
-                    //printf("||%d|| sending to child: %d\n", i, returnPage);
                     write( pipes[i][TO_CHILD][WRITE_PIPE], &returnPage, sizeof(returnPage));
             }
         }
@@ -111,42 +119,70 @@ void parentProcess(int pipes[3][2][2], int mode, char *fileArgs[3]) {
     printSystemStats( countTotalReferences( systems, NUM_FILES), countTotalFaults( systems, NUM_FILES));
 }
 
-
-void childProcess(int pipes[2][2], char *refArg ) {
-    setFlags(pipes);
+/*
+ * Reads the file specified in fileArg,
+ *   and pipes the page numbers found in the file to the parent via the array of pipes.
+ * It then reads from the pipe the parent wrote to the frame in which the page was found in,
+ *   or loaded into if it wasnt found.
+ */
+void childProcess(int pipes[2][2], char *fileArg ) {
+    setNonBlocking(pipes[TO_PARENT]);
     close(pipes[TO_PARENT][READ_PIPE]);
     close(pipes[TO_CHILD][WRITE_PIPE]);
     int pageNum;
-    int returnPages[1024];
-    int numReturnPages = 0;
+    int frameNumbers[MAX_BUFFER_SIZE];
+    int numFrames = 0;
 
     FILE *refFile;
-    if ((refFile = fopen(refArg, "r")) == NULL) {
-        printf( "%s", refArg);
+    if ((refFile = fopen(fileArg, "r")) == NULL) {
+        printf( "%s", fileArg);
         fatalsys("Failed to open reference file\n");
     }
 
     while ( fscanf(refFile, "%d", &pageNum) != EOF) {
-        printf("--read from file:%d:\n", pageNum);
         write(pipes[TO_PARENT][WRITE_PIPE], &pageNum, sizeof(pageNum));
-        read( pipes[TO_CHILD][READ_PIPE], &returnPages[ numReturnPages], sizeof( int));
-        printf("--received %d from parent\n", returnPages[ numReturnPages]);
+        read( pipes[TO_CHILD][READ_PIPE], &frameNumbers[ numFrames], sizeof( int));
+        numFrames++;
     }
 
     if (fclose(refFile) == EOF) {
         fatalsys("Failed to close transaction file");
     }
-    //printf("====done!====\n");
+
     close( pipes[TO_CHILD][READ_PIPE]);
     close( pipes[TO_PARENT][WRITE_PIPE]);
-    printf("--child terminated successfully!\n");
+
+    printf("\\--------------------------------/\n");
+    printf("--file %s processed successfully!\n", fileArg);
+    printf("--frame numbers received:\n");
+    printFrameNumbers( frameNumbers, numFrames);
+    printf("/--------------------------------\\\n");
+
+    //sleep(1); // optional, to prevent print collisions
     exit( EXIT_SUCCESS );
 }
 
+/*
+ * Prints the frame numbers which the child process received.
+ */
+void printFrameNumbers( int frameNumbers[], int numFrames) {
+    for( int i = 0; i*FRAMES_PRINTED_PER_LINE < numFrames; i++) {
+        printf("-- ");
+        for( int j = 0; (j < FRAMES_PRINTED_PER_LINE) && (i * FRAMES_PRINTED_PER_LINE + j) < numFrames; j++) {
+            printf("%d ", frameNumbers[ i * FRAMES_PRINTED_PER_LINE + j]);
+        }
+        printf("\n");
+    }
+}
+
+/*
+ * Prints the page system,
+ *   along with the file it was fed from.
+ */
 void printPageSystem( pageSystem system) {
 
     printf("\n   /_________________\\\n");
-    printf("  | FILE: %s\n", system.id);
+    printf("  | FILE: %s\n", system.source);
     printf("  |-------------------\n  ");
     for( int i = 0; i < NUM_PAGES; i++) {
         if( system.pages[i] < 0 ){
@@ -159,6 +195,9 @@ void printPageSystem( pageSystem system) {
     printSystemStats( system.referenceCount, system.faults);
 }
 
+/*
+ * Counts the total number of faults in all systems.
+ */
 int countTotalFaults( pageSystem systems[], int lengthSystem) {
     int res = 0;
     for( int i = 0; i < lengthSystem; i++) {
@@ -167,6 +206,9 @@ int countTotalFaults( pageSystem systems[], int lengthSystem) {
     return res;
 }
 
+/*
+ * Counts the total number of references in all systems.
+ */
 int countTotalReferences( pageSystem systems[], int lengthSystem) {
     int res = 0;
     for( int i = 0; i < lengthSystem; i++) {
@@ -175,6 +217,9 @@ int countTotalReferences( pageSystem systems[], int lengthSystem) {
     return res;
 }
 
+/*
+ * Prints the fault, reference count, and fault rate of the system.
+ */
 void printSystemStats( int references, int faults) {
     printf("  | REFERENCES: %d\n", references);
     printf("  | FAULTS: %d\n", faults);
@@ -182,6 +227,11 @@ void printSystemStats( int references, int faults) {
     printf("  \\__________________/\n\n");
 }
 
+/*
+ * Replacement algorithm for pageSystem system's pages, based on LRU.
+ * Also keeps track of the number of references so far, and faults.
+ * pageNum: the page requested.
+ */
 pageSystem processLRU(int val, pageSystem system) {
     system.returnVal = findPage( system.pages, val);
 
@@ -199,12 +249,17 @@ pageSystem processLRU(int val, pageSystem system) {
     return system;
 }
 
-pageSystem processFIFO(int val, pageSystem system) {
-    system.returnVal = findPage( system.pages, val);
+/*
+ * Replacement algorithm for pageSystem system's pages, based on FIFO.
+ * Also keeps track of the number of references so far, and faults.
+ * pageNum: the page requested.
+ */
+pageSystem processFIFO(int pageNum, pageSystem system) {
+    system.returnVal = findPage( system.pages, pageNum);
 
     if( system.returnVal == -1) {
         system.returnVal = system.oldest;
-        system.pages[ system.oldest] = val;
+        system.pages[ system.oldest] = pageNum;
         system.oldest = (system.oldest + 1) % NUM_PAGES;
         system.faults++;
     }
@@ -213,6 +268,11 @@ pageSystem processFIFO(int val, pageSystem system) {
     return system;
 }
 
+/*
+ * Updates the ages of the pages, based on which page was last accessed or replaced.
+ * int newPage is the page which was just accessed / replaced.
+ * pageSystem system is the system containing the paging system.
+ */
 pageSystem updateAges( pageSystem system, int newPage) {
 
     for( int i = 0; i < NUM_PAGES; i++) {
@@ -225,6 +285,11 @@ pageSystem updateAges( pageSystem system, int newPage) {
     return system;
 }
 
+/*
+ * Returns the index at which the page is found.
+ * Don't have to worry about duplicate pages,
+ *   as only one instance of a page can be found in a system.
+ */
 int findPage( int pages[], int num) {
     int res = -1;
 
@@ -237,6 +302,9 @@ int findPage( int pages[], int num) {
     return res;
 }
 
+/*
+ * Returns the index of the oldest page in the pageSystem system.
+ */
 int getOldest( pageSystem system) {
     int oldest = 0;
 
@@ -248,19 +316,27 @@ int getOldest( pageSystem system) {
     return oldest;
 }
 
-void setFlags(int pipes[2][2]) {
+/*
+ * Adds the O_NONBLOCK flags for the read-end of the pipe.
+ */
+void setNonBlocking(int pipes[]) {
     unsigned int flags;
 
 
-    if ( (flags = fcntl(pipes[TO_PARENT][READ_PIPE], F_GETFL )) < 0 )
+    if ( (flags = fcntl(pipes[READ_PIPE], F_GETFL )) < 0 )
         fatalsys("fcntl get flags call");
 
     flags |= O_NONBLOCK;
 
-    if ( fcntl(pipes[TO_PARENT][READ_PIPE], F_SETFL, O_NONBLOCK ) < 0 )
+    if ( fcntl(pipes[READ_PIPE], F_SETFL, flags ) < 0 )
         fatalsys("fcntl set flags call");
 }
 
+/*
+ * Initializer for default pageSystem.
+ * fileArg: the file being fed into the pageSystem,
+ *   assigned to source.
+ */
 pageSystem initSystem(char *fileArg) {
     pageSystem system = {
             .pages = {-1, -1, -1, -1},
@@ -269,12 +345,15 @@ pageSystem initSystem(char *fileArg) {
             .faults = 0,
             .referenceCount = 0,
             .returnVal = 0,
-            .id = fileArg
+            .source = fileArg
     };
     return system;
 }
 
-
+/*
+ * fatalsys call for fatal system errors
+ * errmsg: the error message to print
+ */
 void fatalsys( char *errmsg ) {
     perror( errmsg );
     exit( EXIT_FAILURE );
