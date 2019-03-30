@@ -1,3 +1,11 @@
+/*
+pagingSystem.c
+Created by Philippe Nadon
+Last modified March 30, 2019
+
+Simulates a paging system using pipes between a parent and child process.
+*/
+
 #include <stdlib.h>
 #include <fcntl.h>
 #include <stdio.h>
