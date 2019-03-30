@@ -3,7 +3,7 @@ pagingSystem.c
 Created by Philippe Nadon
 Last modified March 30, 2019
 
-Simulates a paging system using pipes between a parent and child process.
+Simulates a paging system using pipes between a parent and child process. 
 */
 
 #include <stdlib.h>
@@ -36,7 +36,7 @@ Simulates a paging system using pipes between a parent and child process.
 
 int main( int argc, char *argv[]) {
     if( argc != (NUM_OTHER_ARGS + NUM_FILES)) {
-        fprintf( stderr, "Incorrect argument count\n");
+        fprintf( stderr, "Usage: ./paginSystem (mode) (file 1) (file 2) (file 3)\n");
         exit( EXIT_FAILURE);
     }
 
